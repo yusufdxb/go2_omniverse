@@ -1,3 +1,14 @@
+> ## About this fork
+>
+> This is a fork of [`abizovnuralem/go2_omniverse`](https://github.com/abizovnuralem/go2_omniverse). It exists for two pieces of work:
+>
+> **1. An Ubuntu 24.04 / Isaac Sim 5.0 / ROS 2 Jazzy port, which was merged upstream.**
+> Submitted as [abizovnuralem/go2_omniverse#84](https://github.com/abizovnuralem/go2_omniverse/pull/84) and merged on 2026-07-01 (+1337 / -263). The upstream project now carries this track, so use upstream if that is all you need.
+>
+> **2. `twinbot`: an IMU-driven digital-twin mode** that plays back real Unitree Go2 telemetry so the simulated dog mirrors the physical robot's pose. See [`docs/TWINBOT_IMU_FIX.md`](../../blob/feat/jazzy-isaacsim5-experimental/docs/TWINBOT_IMU_FIX.md) and [`JAZZY.md`](../../blob/feat/jazzy-isaacsim5-experimental/JAZZY.md).
+>
+> **Both live on the [`feat/jazzy-isaacsim5-experimental`](../../tree/feat/jazzy-isaacsim5-experimental) branch, not on `master`.** This `master` branch tracks upstream and contains none of the above. The README below is upstream's.
+
 ![Digital Twins](https://github.com/abizovnuralem/go2_ros2_sdk/assets/33475993/ddbe30ab-21d1-46fd-b44b-198efba92771)
 
 
