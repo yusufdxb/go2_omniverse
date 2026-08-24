@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Twinbot bridge — runs on the Jetson payload computer (ROS 2 Humble).
+"""Twinbot bridge, runs on the Jetson payload computer (ROS 2 Humble).
 
 The Unitree Go2 publishes /lowstate on the ethernet subnet (192.168.123.x)
 using CycloneDDS. The Isaac Sim PC listens on WiFi (192.168.0.x) using
@@ -64,7 +64,7 @@ def cyclone_reader(queue: mp.Queue):
             super().__init__("twinbot_reader")
             self._count = 0
             self.create_subscription(LowState, "/lowstate", self._cb, qos)
-            self.get_logger().info(f"CycloneDDS reader on {ETH_IFACE} — listening /lowstate")
+            self.get_logger().info(f"CycloneDDS reader on {ETH_IFACE}, listening /lowstate")
 
         def _cb(self, msg):
             pos = [float(msg.motor_state[i].q)       for i in range(12)]
@@ -80,7 +80,7 @@ def cyclone_reader(queue: mp.Queue):
                 pass
             self._count += 1
             if self._count % 1000 == 0:
-                self.get_logger().info(f"forwarded {self._count} msgs — FL_hip={pos[3]:.3f} rad")
+                self.get_logger().info(f"forwarded {self._count} msgs, FL_hip={pos[3]:.3f} rad")
 
     rclpy.init()
     node = Reader()
@@ -116,10 +116,10 @@ def fastdds_publisher(queue: mp.Queue):
             super().__init__("twinbot_publisher")
             self._pub_js = self.create_publisher(JointState, "/real_dog/joint_states", qos)
             self._pub_odom = self.create_publisher(Odometry, "/real_dog/odom", 10)
-            # forward SLAM odom from eth (it's also CycloneDDS, won't cross — skip for now)
+            # forward SLAM odom from eth (it's also CycloneDDS, won't cross, skip for now)
             self.create_timer(0.002, self._drain)  # 500 Hz drain
             self._seq = 0
-            self.get_logger().info("FastDDS publisher on WiFi — publishing /real_dog/joint_states")
+            self.get_logger().info("FastDDS publisher on WiFi, publishing /real_dog/joint_states")
 
         def _drain(self):
             # drain all pending items, publish only latest

@@ -1,11 +1,11 @@
-"""Twinbot subscriber — runs inside the Isaac Sim process.
+"""Twinbot subscriber, runs inside the Isaac Sim process.
 
 Consumes `/real_dog/joint_states` (joint positions in SDK motor order) and
 `/real_dog/odom` (base orientation from the IMU) published by
 `twinbot_bridge.py` on the Jetson, and overwrites the sim articulation's
 joint state and root pose each frame.
 
-This is kinematic playback — physics is bypassed so the sim dog mirrors
+This is kinematic playback, physics is bypassed so the sim dog mirrors
 the real dog exactly regardless of contact forces or policy feedback.
 """
 from __future__ import annotations
@@ -54,7 +54,7 @@ class TwinbotSubscriber:
         self._thread = threading.Thread(target=self._executor.spin, daemon=True)
         self._thread.start()
         self._node.get_logger().info(
-            "TwinbotSubscriber ready — listening /real_dog/joint_states + /real_dog/odom"
+            "TwinbotSubscriber ready, listening /real_dog/joint_states + /real_dog/odom"
         )
 
     def _cb_joints(self, msg: JointState):

@@ -17,7 +17,7 @@ works and is not changed by this port.
 | IsaacLab (pip)          | 0.54.3                             |
 | Python                  | 3.11 (Isaac Sim's venv)            |
 | Host ROS 2              | Jazzy (used only for tooling)      |
-| In-sim ROS 2 runtime    | Jazzy — **bundled inside** Isaac Sim's `isaacsim.ros2.bridge` extension |
+| In-sim ROS 2 runtime    | Jazzy, **bundled inside** Isaac Sim's `isaacsim.ros2.bridge` extension |
 | RMW                     | `rmw_fastrtps_cpp`                 |
 
 ### Why we do *not* source `/opt/ros/jazzy` in the launcher
@@ -28,7 +28,7 @@ ships a pinned **Python 3.11** interpreter. Mixing the two produces an
 
 Isaac Sim's `isaacsim.ros2.bridge` extension ships its own **internal** ROS 2
 Jazzy runtime (`rclpy`, `rmw_fastrtps_cpp`, and all common message
-packages — `std_msgs`, `sensor_msgs`, `geometry_msgs`, `nav_msgs`,
+packages, `std_msgs`, `sensor_msgs`, `geometry_msgs`, `nav_msgs`,
 `tf2_msgs`, etc.), built for Python 3.11 and installed under
 `…/isaacsim/exts/isaacsim.ros2.bridge/jazzy/`. The launcher scripts point
 `LD_LIBRARY_PATH` and `PYTHONPATH` at that bundle, which is the path NVIDIA
@@ -80,13 +80,13 @@ cd go2_omniverse
 ```
 
 The launcher auto-points `LD_LIBRARY_PATH` / `PYTHONPATH` at the Isaac Sim
-bundled Jazzy runtime — you do **not** need to `source /opt/ros/jazzy`.
+bundled Jazzy runtime, you do **not** need to `source /opt/ros/jazzy`.
 
 Override knobs:
 
-- `ISAAC_VENV` — path to the venv (default `~/Sim/isaac-sim-venv`)
-- `ISAACLAB_PATH` — path to a source IsaacLab checkout if you use one
-- `RMW_IMPLEMENTATION` — defaults to `rmw_fastrtps_cpp`
+- `ISAAC_VENV`, path to the venv (default `~/Sim/isaac-sim-venv`)
+- `ISAACLAB_PATH`, path to a source IsaacLab checkout if you use one
+- `RMW_IMPLEMENTATION`, defaults to `rmw_fastrtps_cpp`
 
 ## Topics published
 
@@ -115,7 +115,7 @@ Guidance for mixed-distro setups:
 - Avoid `Go2State` on the shared wire until you have a bridge on the
   Humble side, since the sim no longer publishes it.
 - Run discovery on the same L2 segment or use the Fast DDS discovery
-  server — standard ROS 2 mixed-distro guidance applies.
+  server, standard ROS 2 mixed-distro guidance applies.
 
 Not validated here: a full end-to-end dog ↔ sim link, since the lab dog is
 not on this bench. Treat the interop section as documented expectation, not
@@ -139,7 +139,7 @@ verified behavior.
   timeframe on this specific machine (first-time Isaac Sim 5.0 shader-cache
   compilation dominates the boot, see README note below).
 - Mixed-distro (Jazzy sim host ↔ Humble dog) live topic exchange.
-- Custom envs (`--custom_env`), VR support, Nav2 stack on Jazzy —
+- Custom envs (`--custom_env`), VR support, Nav2 stack on Jazzy , 
   untouched by this port and not re-validated.
 
 ## Known limitations

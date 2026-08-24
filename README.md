@@ -1,7 +1,7 @@
 <p align="center">
 <img src="./media/hero.png" width="900" alt="Unitree Go2 digital twin rendered in Isaac Sim with studio HDRI lighting">
 </p>
-<p align="center"><em>Unitree Go2 twin in Isaac Sim 5.x — studio HDRI lighting, RT2 <code>quality</code> render.</em></p>
+<p align="center"><em>Unitree Go2 twin in Isaac Sim 5.x, studio HDRI lighting, RT2 <code>quality</code> render.</em></p>
 
 ![Digital Twins](https://github.com/abizovnuralem/go2_ros2_sdk/assets/33475993/ddbe30ab-21d1-46fd-b44b-198efba92771)
 
@@ -172,11 +172,11 @@ If you would like to get more detailed information about Robolaunch web platform
 
 There are now two supported tracks:
 
-**Track A — original, Humble-based (Ubuntu 22.04, Isaac Sim 2023.1.1, Orbit 0.3.0)**
+**Track A, original, Humble-based (Ubuntu 22.04, Isaac Sim 2023.1.1, Orbit 0.3.0)**
 
 This is the path the repo was originally designed for. Instructions below are unchanged.
 
-**Track B — experimental, Jazzy-based (Ubuntu 24.04, Isaac Sim 5.0, IsaacLab 0.54.3)**
+**Track B, experimental, Jazzy-based (Ubuntu 24.04, Isaac Sim 5.0, IsaacLab 0.54.3)**
 
 A pip-into-venv setup that uses the ROS 2 Jazzy runtime **bundled inside**
 Isaac Sim (resolved from the `isaacsim.ros2.core` extension on Isaac 5.x, or

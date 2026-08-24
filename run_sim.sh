@@ -6,7 +6,7 @@ set -euo pipefail
 # We intentionally do NOT source /opt/ros/jazzy because system Jazzy is built
 # for Python 3.12 and Isaac Sim 5.0 requires Python 3.11. The Isaac Sim
 # ROS 2 bridge extension ships an internal Jazzy (rclpy + msg libs) matching
-# Python 3.11 — this script points the loader at those libraries.
+# Python 3.11, this script points the loader at those libraries.
 
 export ISAAC_VENV="${ISAAC_VENV:-$HOME/Sim/isaac-sim-venv}"
 export ISAACLAB_PATH="${ISAACLAB_PATH:-$HOME/Sim/IsaacLab}"
@@ -35,7 +35,7 @@ fi
 # PYTHONPATH is required for rclpy imports. LD_LIBRARY_PATH is required so
 # rclpy's native typesupport libs can be dlopen'd at publisher-creation time.
 # When the bridge extension is also enabled, two copies of rcl_interfaces get
-# loaded and trigger a ParameterEvent assert — so omniverse_sim.py now enables
+# loaded and trigger a ParameterEvent assert, so omniverse_sim.py now enables
 # only the OmniGraph core extensions, not isaacsim.ros2.bridge, and publishes
 # via rclpy from Python directly.
 export PYTHONPATH="$BUNDLED_RCLPY${PYTHONPATH:+:$PYTHONPATH}"

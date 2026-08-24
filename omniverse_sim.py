@@ -399,7 +399,7 @@ def capture_hero_shots(env, policy, obs, device, n_settle, out_dir):
                     a.Set(val)
         in_env = True
     except Exception as e:
-        _ckpt(f"hero environment load failed ({type(e).__name__}: {e}) — shooting on HDRI void")
+        _ckpt(f"hero environment load failed ({type(e).__name__}: {e}), shooting on HDRI void")
         in_env = False
     # World-anchored hero cam: 1080p, 35mm (less wide/distorted than the 24mm FPV cam).
     cam = Camera(CameraCfg(
@@ -446,7 +446,7 @@ def capture_hero_shots(env, policy, obs, device, n_settle, out_dir):
             _ckpt(f"cinematic: PathTracing @ {args_cli.spp} spp, "
                   f"{n_settle_render} render calls/shot")
         else:
-            _ckpt("cinematic: carb settings unavailable — staying on real-time renderer")
+            _ckpt("cinematic: carb settings unavailable, staying on real-time renderer")
 
     # robot base position so shots frame wherever it ended up
     base = _to_numpy_safe(env.unwrapped.scene["robot"].data.root_state_w)[0, :3]
@@ -552,7 +552,7 @@ def run_sim():
     resume_path = get_checkpoint_path(log_root_path, agent_cfg["load_run"], agent_cfg["load_checkpoint"])
     print(f"[INFO]: Loading model checkpoint from: {resume_path}")
 
-    # Legacy checkpoint — build a matching MLP for inference (see helper above).
+    # Legacy checkpoint, build a matching MLP for inference (see helper above).
     device = str(env.unwrapped.device)
     actor, _, _ = _load_mlp_policy(
         resume_path,
@@ -581,7 +581,7 @@ def run_sim():
     if args_cli.twinbot:
         from twinbot import TwinbotSubscriber
         twin = TwinbotSubscriber(env)
-        _ckpt("TwinbotSubscriber ready — waiting for /real_dog/joint_states")
+        _ckpt("TwinbotSubscriber ready, waiting for /real_dog/joint_states")
 
     # LiDAR is opt-in via --lidar_config. The repo's Unitree_L1.json still uses
     # the pre-5.0 profile schema, so the default stays off; pass an Isaac-shipped
@@ -602,7 +602,7 @@ def run_sim():
         add_camera(env_cfg.scene.num_envs, args_cli.robot)
         _ckpt("camera added")
     except Exception as e:
-        _ckpt(f"add_camera skipped ({type(e).__name__}: {e}) — isaaclab.sensors.Camera API changed in 0.54.x")
+        _ckpt(f"add_camera skipped ({type(e).__name__}: {e}), isaaclab.sensors.Camera API changed in 0.54.x")
 
     # ROS 2 camera OmniGraph stream requires isaacsim.ros2.bridge, which we
     # deliberately do not enable (see extension-enable note above). Skip.
@@ -651,7 +651,7 @@ def run_sim():
             obs, _, _, _ = env.step(actions)
             if twin is not None:
                 # Overwrite physics-stepped state with the real dog's state.
-                # Kinematic playback — bypasses PD/gravity for an exact mirror.
+                # Kinematic playback, bypasses PD/gravity for an exact mirror.
                 twin.apply(device)
             if lidar_render_period is not None and time.time() >= next_lidar_render:
                 simulation_app.update()

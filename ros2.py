@@ -302,7 +302,7 @@ class RobotBaseNode(Node):
             self.go2_lidar_pub.append(self.create_publisher(PointCloud2, f'robot{i}/point_cloud2', qos_profile))
             self.odom_pub.append(self.create_publisher(Odometry, f'robot{i}/odom', qos_profile))
             self.imu_pub.append(self.create_publisher(Imu, f'robot{i}/imu', qos_profile))
-        # Publish TF as tf2_msgs/TFMessage on /tf — avoids tf2_ros dependency
+        # Publish TF as tf2_msgs/TFMessage on /tf, avoids tf2_ros dependency
         self.tf_pub = self.create_publisher(TFMessage, '/tf', qos_profile)
 
     def publish_joints(self, joint_names_lst, joint_state_lst, robot_num):

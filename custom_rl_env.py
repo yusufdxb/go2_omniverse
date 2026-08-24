@@ -54,7 +54,7 @@ from omniverse_sim import args_cli
 
 
 # ponytail: resolve Isaac's bundled studio HDRI once at module load (a plain string, so
-# it survives @configclass deepcopy — module objects in a class body cannot be pickled).
+# it survives @configclass deepcopy, module objects in a class body cannot be pickled).
 # Glob because the extscache path is version-pinned and shifts on Isaac upgrades; empty
 # string falls back to a flat neutral dome if the asset ever moves.
 def _find_studio_hdri():

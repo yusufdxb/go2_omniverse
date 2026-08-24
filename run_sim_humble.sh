@@ -15,7 +15,7 @@ set -euo pipefail
 #   - The venv's Python is 3.12 (not 3.11 like CaresLab). The bundled Humble
 #     .so's are cpython-312, so this matches.
 #
-# System /opt/ros/humble is NOT sourced — same ABI-isolation reasoning as the
+# System /opt/ros/humble is NOT sourced, same ABI-isolation reasoning as the
 # Jazzy launcher: the bundled runtime is what Isaac Sim loads, and mixing an
 # external rclpy in causes typesupport double-loads.
 
