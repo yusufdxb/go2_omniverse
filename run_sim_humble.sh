@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# mewtwo-side launcher: Isaac Sim 6.0 + IsaacLab 4.5.22 + bundled Humble.
+# workstation-side launcher: Isaac Sim 6.0 + IsaacLab 4.5.22 + bundled Humble.
 #
 # Differences from run_sim.sh (which targets CaresLab: Isaac Sim 5.0 + bundled
 # Jazzy, Python 3.11):
@@ -10,7 +10,7 @@ set -euo pipefail
 #     `isaacsim.ros2.core/{distro}/`. This launcher points LD_LIBRARY_PATH /
 #     PYTHONPATH at the new location.
 #   - ROS_DISTRO=humble. Isaac Sim 6.0 ships both humble and jazzy bundles;
-#     mewtwo's on-robot side is Humble, so we use Humble to avoid a cross-
+#     the on-robot side is Humble, so we use Humble to avoid a cross-
 #     distro hop on the network.
 #   - The venv's Python is 3.12 (not 3.11 like CaresLab). The bundled Humble
 #     .so's are cpython-312, so this matches.
