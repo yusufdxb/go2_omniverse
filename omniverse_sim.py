@@ -7,9 +7,11 @@ import argparse
 from isaaclab.app import AppLauncher
 
 
-import cli_args  
+import cli_args
+import render_profile  # stdlib-only at import time; isaacsim/carb are resolved lazily
 import time
 import os
+import tempfile
 import threading
 
 
@@ -30,6 +32,22 @@ parser.add_argument("--capture", type=int, default=0,
                          "(headless-safe; uses an isaaclab Camera render product, not a window grab).")
 parser.add_argument("--capture_dir", type=str, default="/tmp/twin_hero",
                     help="Directory to write hero PNGs into when --capture > 0.")
+parser.add_argument("--cinematic", action="store_true", default=False,
+                    help="Render hero shots on the offline path (quality .kit preset + RTX "
+                         "PathTracing) instead of the real-time raster path the training loop "
+                         "uses. Far slower per frame, so it is only worth it with --capture.")
+parser.add_argument("--spp", type=int, default=64,
+                    help="Path-traced samples per pixel when --cinematic is set. Below ~32 the "
+                         "residual noise survives h264 and reads as a dirty frame.")
+parser.add_argument("--lidar_config", type=str, default="",
+                    help="RTX LiDAR config to attach. Empty disables the LiDAR, which is the "
+                         "historical default. The name must match a SUPPORTED_LIDAR_CONFIGS "
+                         "basename in isaacsim.sensors.rtx exactly, case included; anything "
+                         "else is now a hard error rather than a silent fallback to Isaac's "
+                         "default rotary profile. The repo's own Isaac_sim/Unitree/Unitree_L1.json "
+                         "is written against the pre-5.0 schema (profile.emitters dict) and is "
+                         "rejected by Isaac 5/6, which expect profile.emitterStates. Until that "
+                         "file is migrated, use HESAI_XT32_SD10.")
 
 
 # append RSL-RL cli arguments
@@ -46,6 +64,14 @@ def _ckpt(msg: str):
 
 
 _ckpt("AppLauncher: constructing...")
+# The quality preset is selected by a .kit experience file that Kit reads while
+# booting, so this has to be set BEFORE AppLauncher is constructed; assigning it
+# afterwards is silently ignored. AppLauncher takes the namespace's __dict__ and
+# reads "rendering_mode" off it, so setting the attribute here is equivalent to
+# having passed --rendering_mode on the command line.
+if args_cli.cinematic:
+    args_cli.rendering_mode = "quality"
+    _ckpt("cinematic: rendering_mode=quality")
 # launch omniverse app
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
@@ -72,9 +98,10 @@ _required_exts = (
     "omni.graph.core",
     "omni.graph.action",
     "omni.graph.nodes",
-    # Needed because ros2.py imports isaacsim.sensors.rtx.LidarRtx. This is
-    # transitively enabled by isaacsim.ros2.bridge, but we don't enable the
-    # bridge (see note above).
+    # Registers the IsaacSensorCreateRtxLidar command and the
+    # RtxSensorCpuIsaacCreateRTXLidarScanBuffer annotator that ros2.py's
+    # add_rtx_lidar uses. Transitively enabled by isaacsim.ros2.bridge, but we
+    # don't enable the bridge (see note above).
     "isaacsim.sensors.rtx",
 )
 for _ext in _required_exts:
@@ -137,6 +164,50 @@ from omnigraph import create_front_cam_omnigraph
 _ckpt("all imports complete")
 
 # twinbot import is deferred until after rclpy.init() in run_sim()
+
+
+_LIDAR_DEBUG = os.environ.get("GO2_LIDAR_DEBUG", "") not in ("", "0")
+_lidar_debug_state = {"n": 0, "t0": 0.0, "forced_play": False}
+
+
+def _lidar_debug_reset():
+    _lidar_debug_state["n"] = 0
+    _lidar_debug_state["t0"] = time.time()
+    _lidar_debug_state["forced_play"] = False
+
+
+def _lidar_debug_tick(annotator_lst):
+    """Report why the RTX scan buffer is or is not producing points.
+
+    Enabled with GO2_LIDAR_DEBUG=1. Samples the Kit timeline state alongside the
+    annotator output, because the RTX sensor plugin advances off the timeline,
+    and IsaacLab drives physics through its own PhysxManager rather than by
+    playing the timeline. Halfway through, it forces the timeline to play so a
+    single run shows the before and after.
+    """
+    if not _LIDAR_DEBUG or not annotator_lst:
+        return
+    import omni.timeline
+
+    state = _lidar_debug_state
+    elapsed = time.time() - state["t0"]
+    if elapsed > 8.0 and not state["forced_play"]:
+        state["forced_play"] = True
+        omni.timeline.get_timeline_interface().play()
+        print("[lidar-debug] forced omni.timeline.play()", flush=True)
+    if state["n"] >= 40 or elapsed < state["n"] * 0.5:
+        return
+    state["n"] += 1
+    timeline = omni.timeline.get_timeline_interface()
+    data = annotator_lst[0].get_data()
+    payload = data.get("data") if isinstance(data, dict) else data
+    shape = getattr(payload, "shape", None)
+    print(
+        f"[lidar-debug] t={elapsed:6.2f}s timeline_playing={timeline.is_playing()} "
+        f"timeline_time={timeline.get_current_time():.3f} keys={sorted(data.keys()) if isinstance(data, dict) else type(data)} "
+        f"shape={shape}",
+        flush=True,
+    )
 
 
 def _load_mlp_policy(ckpt_path: str, hidden_dims, activation_name: str, device: str):
@@ -221,6 +292,74 @@ def setup_custom_env():
         print("Error loading custom environment. You should download custom envs folder from: https://drive.google.com/drive/folders/1vVGuO1KIX1K6mD6mBHDZGm9nk2vaRyj3?usp=sharing")
 
 
+# The warehouse's materials are converted from Unreal and every one of them
+# starts with `import .::OmniUe4Function::*`. That leading `.` is a MODULE-relative
+# import, which the MDL compiler resolves against the directory the material was
+# loaded from -- not against Kit's MDL search paths, so the copies bundled in the
+# isaacsim wheel under kit/mdl/core/Ue4 are never consulted and adding a search
+# path does not help. When the environment is streamed, omni.client only caches
+# files something explicitly asked for, and nothing ever asks for these two: they
+# are referenced by the MDL compiler, which reads the local filesystem. Result:
+# every warehouse material fails to compile and Isaac falls back to its unresolved-
+# material colour, rendering the entire environment bright red.
+#
+# Reading them through omni.client puts them in the same cache directory as the
+# materials that DID get fetched, which is all the compiler needs.
+_UE4_MDL_SIBLINGS = ("OmniUe4Function.mdl", "OmniUe4Base.mdl")
+
+
+def _prefetch_ue4_mdl_siblings(materials_url: str) -> int:
+    """Stage the UE4 base MDL modules next to the materials that import them.
+
+    Two more obvious approaches do NOT work here, both verified on this runtime:
+
+    * ``omni.client.read_file`` fetches into memory only, leaving nothing on disk.
+    * ``omni.client.get_local_file`` writes to ``~/.cache/ov/client/https`` under a
+      hashed filename, so the module is on disk but not under the name or in the
+      directory the compiler looks for.
+
+    What the MDL compiler actually reads is omni.usdMdl's own staging mirror: each
+    remote ``.mdl`` referenced by the USD is copied to ``<tmp>/<url path>`` so it can
+    be compiled from a real file. So the fix is to write the modules into that same
+    mirror directory, which is derived from the URL rather than discovered, because
+    nothing exposes it as an API.
+
+    Returns how many modules were staged. Never raises: flat materials still make a
+    usable hero shot, and this sits inside a render path that should not die over a
+    texture.
+    """
+    if not materials_url.startswith(("http://", "https://", "omniverse://")):
+        # A local asset root already has the modules adjacent, or genuinely lacks
+        # them; either way there is no staging mirror to populate.
+        return 0
+    try:
+        import omni.client
+    except ImportError:
+        return 0
+
+    from urllib.parse import urlparse
+
+    stage_dir = os.path.join(tempfile.gettempdir(), urlparse(materials_url).path.lstrip("/"))
+    ok = 0
+    for name in _UE4_MDL_SIBLINGS:
+        dest = os.path.join(stage_dir, name)
+        if os.path.exists(dest):
+            ok += 1
+            continue
+        try:
+            result, _, content = omni.client.read_file(f"{materials_url}/{name}")
+            if result != omni.client.Result.OK:
+                _ckpt(f"mdl prefetch {name}: {result}")
+                continue
+            os.makedirs(stage_dir, exist_ok=True)
+            with open(dest, "wb") as fh:
+                fh.write(memoryview(content))
+            ok += 1
+        except Exception as e:
+            _ckpt(f"mdl prefetch {name}: {type(e).__name__}: {e}")
+    return ok
+
+
 def capture_hero_shots(env, policy, obs, device, n_settle, out_dir):
     """Write hero PNGs of the Go2 from several angles via an isaaclab Camera render
     product. Headless-safe: it reads the RGB tensor directly, so it does NOT depend on
@@ -240,7 +379,12 @@ def capture_hero_shots(env, policy, obs, device, n_settle, out_dir):
         from isaacsim.storage.native import get_assets_root_path
         root = get_assets_root_path() or \
             "https://omniverse-content-staging.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0"
-        wh = f"{root}/Isaac/Environments/Simple_Warehouse/warehouse.usd"
+        wh_dir = f"{root}/Isaac/Environments/Simple_Warehouse"
+        wh = f"{wh_dir}/warehouse.usd"
+        # Must happen BEFORE the USD loads: the materials compile during load, and
+        # a module missing at that moment is a permanent failure for that material.
+        n_mdl = _prefetch_ue4_mdl_siblings(f"{wh_dir}/Materials")
+        _ckpt(f"prefetched {n_mdl}/{len(_UE4_MDL_SIBLINGS)} UE4 base MDL modules")
         sim_utils.UsdFileCfg(usd_path=wh).func("/World/hero_env", sim_utils.UsdFileCfg(usd_path=wh))
         _ckpt(f"loaded hero environment: {wh}")
         # The warehouse brings its own ceiling lighting; dim our flat fill dome + sun so the
@@ -287,10 +431,22 @@ def capture_hero_shots(env, policy, obs, device, n_settle, out_dir):
     except Exception as e:
         _ckpt(f"could not disable command debug_vis ({type(e).__name__}: {e})")
 
-    # Let the policy stand the robot up and settle.
+    # Let the policy stand the robot up and settle. Deliberately still on the
+    # real-time renderer: settling is dozens of steps that are never captured,
+    # and paying the path-traced cost for them would dominate the whole run.
     for _ in range(max(n_settle, 1)):
         step()
     cam.update(dt)
+
+    # Only now, with the robot standing still, switch to the offline renderer.
+    n_settle_render = render_profile.settle_frames(path_tracing=False)
+    if args_cli.cinematic:
+        if render_profile.enable_path_tracing(args_cli.spp):
+            n_settle_render = render_profile.settle_frames(args_cli.spp)
+            _ckpt(f"cinematic: PathTracing @ {args_cli.spp} spp, "
+                  f"{n_settle_render} render calls/shot")
+        else:
+            _ckpt("cinematic: carb settings unavailable — staying on real-time renderer")
 
     # robot base position so shots frame wherever it ended up
     base = _to_numpy_safe(env.unwrapped.scene["robot"].data.root_state_w)[0, :3]
@@ -308,8 +464,10 @@ def capture_hero_shots(env, policy, obs, device, n_settle, out_dir):
     saved = []
     for i, name in enumerate(shots):
         cam.set_world_poses_from_view(eyes[i:i + 1], targets[i:i + 1])
-        # Re-render a few frames so RT2 accumulation/exposure settles for this view.
-        for _ in range(24):
+        # Re-render so accumulation/exposure settles for this view. The camera
+        # jumped, so the first frames still carry reprojected history from the
+        # previous shot and would ghost if captured.
+        for _ in range(n_settle_render):
             step()
             cam.update(dt)
         rgb = cam.data.output["rgb"][0].detach().cpu().numpy()
@@ -425,8 +583,21 @@ def run_sim():
         twin = TwinbotSubscriber(env)
         _ckpt("TwinbotSubscriber ready — waiting for /real_dog/joint_states")
 
-    # Lidar disabled pending Unitree_L1.json update for Isaac Sim 5.0 schema.
+    # LiDAR is opt-in via --lidar_config. The repo's Unitree_L1.json still uses
+    # the pre-5.0 profile schema, so the default stays off; pass an Isaac-shipped
+    # config to get a real ray-traced cloud on robot{i}/point_cloud2.
     annotator_lst = []
+    if args_cli.lidar_config:
+        try:
+            annotator_lst = add_rtx_lidar(
+                env_cfg.scene.num_envs, args_cli.robot, config_file_name=args_cli.lidar_config
+            )
+            _ckpt(f"rtx lidar attached (config={args_cli.lidar_config})")
+        except Exception as e:
+            # Loud, not silent: a missing cloud is otherwise invisible until a
+            # downstream rate monitor reports a permanently stale topic.
+            _ckpt(f"rtx lidar FAILED ({type(e).__name__}: {e})")
+            annotator_lst = []
     try:
         add_camera(env_cfg.scene.num_envs, args_cli.robot)
         _ckpt("camera added")
@@ -447,6 +618,32 @@ def run_sim():
         return
 
     start_time = time.time()
+
+    _lidar_debug_reset()
+
+    # Why the explicit app pump below.
+    #
+    # IsaacLab 4.5.22's SimulationContext.render() (isaaclab/sim/simulation_context.py)
+    # only calls update_visualizers() and its render callbacks. It never calls
+    # omni.kit.app.get_app().update(), so it never drives a Hydra render frame.
+    # Its docstring says as much: "Camera sensors drive their configured renderer
+    # when fetching data". Only a visualizer whose pumps_app_update() is True
+    # (KitVisualizer) pumps the app loop, and AppLauncher auto-injects one for XR
+    # only, never for plain --headless.
+    #
+    # So --enable_cameras is necessary but not sufficient. It selects the
+    # rendering Kit experience and sets _offscreen_render, which is what makes
+    # is_rendering True and gets sim.render() called at all, but with no app
+    # update the RTX LiDAR's replicator render product is never ticked and
+    # IsaacCreateRTXLidarScanBuffer returns shape (0,) forever. IsaacLab's own
+    # Camera is unaffected because it pulls its renderer on data fetch.
+    #
+    # Pumping simulation_app.update() ourselves at the LiDAR's publish cadence is
+    # what actually renders it. Only done when a LiDAR is attached, since it is
+    # a full RTX frame and costs real time.
+    lidar_render_period = 1.0 / 20.0 if annotator_lst else None
+    next_lidar_render = 0.0
+
     # simulate environment
     while simulation_app.is_running():
         with torch.inference_mode():
@@ -456,5 +653,9 @@ def run_sim():
                 # Overwrite physics-stepped state with the real dog's state.
                 # Kinematic playback — bypasses PD/gravity for an exact mirror.
                 twin.apply(device)
+            if lidar_render_period is not None and time.time() >= next_lidar_render:
+                simulation_app.update()
+                next_lidar_render = time.time() + lidar_render_period
+            _lidar_debug_tick(annotator_lst)
             pub_robo_data_ros2(args_cli.robot, env_cfg.scene.num_envs, base_node, env, annotator_lst, start_time)
     env.close()

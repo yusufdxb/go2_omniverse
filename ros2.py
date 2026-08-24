@@ -17,8 +17,8 @@ from nav_msgs.msg import Odometry
 from sensor_msgs.msg import PointCloud2, PointField, Imu
 
 from isaaclab.sensors import CameraCfg, Camera
-from isaacsim.sensors.rtx import LidarRtx
 import omni.replicator.core as rep
+from pxr import Gf
 from scipy.spatial.transform import Rotation
 import isaaclab.sim as sim_utils
 
@@ -37,12 +37,22 @@ def _to_numpy(arr):
     return np.asarray(arr)
 
 
+_LIDAR_PUBLISH_FAILED = False
+_LAST_LIDAR_PUB = 0.0
+
+
 def update_meshes_for_cloud2(position_array, origin, rot):
-    q = rot.cpu().numpy()
+    # pub_robo_data_ros2 already converts the articulation buffers to numpy via
+    # _to_numpy, so origin/rot arrive as ndarrays with no .cpu(). Go through
+    # _to_numpy so this works whether the caller hands over torch, warp, or numpy.
+    q = _to_numpy(rot)
     rotation = Rotation.from_quat([q[1], q[2], q[3], q[0]])
-    rotated_vectors = rotation.apply(position_array)
-    rotated_vectors += origin.cpu().numpy()
-    rotated_vectors += [0.0, 0.0, 0.4]
+    # The sensor sits at (0, 0, 0.4) in the BASE frame (see add_rtx_lidar's
+    # translation), so the mount offset has to be rotated with the body before
+    # the world translation is added. Adding it after rotation, as this did,
+    # leaves the cloud tilted off the sensor whenever the robot pitches or rolls.
+    rotated_vectors = rotation.apply(np.asarray(position_array) + [0.0, 0.0, 0.4])
+    rotated_vectors += _to_numpy(origin)
     return rotated_vectors
 
 
@@ -68,30 +78,94 @@ def _create_point_cloud2(header, points):
     return msg
 
 
-def add_rtx_lidar(num_envs, robot_type, debug=False):
+def add_rtx_lidar(num_envs, robot_type, debug=False, config_file_name="Unitree_L1", variant=None):
+    """Attach an RTX LiDAR per env and return one scan-buffer annotator each.
+
+    Deliberately built on the low-level `IsaacSensorCreateRtxLidar` command plus
+    `rep.create.render_product` rather than the `isaacsim.sensors.rtx.LidarRtx`
+    convenience class. LidarRtx derives from isaacsim.core.prims, whose
+    prim.py calls `SimulationManager._get_backend_utils()`. IsaacLab 4.5.22
+    replaces SimulationManager with its backend-specific PhysxManager, which
+    does not implement that method, so constructing LidarRtx raises
+    `AttributeError: type object 'PhysxManager' has no attribute
+    '_get_backend_utils'`. The command path touches none of that.
+
+    Ouster configs are variants on a shared USD in Isaac 5.0+, so a bare name
+    like "OS1_REV6_32ch10hz512res" must be split into config="OS1" plus that
+    variant. Passing the full name still works via a deprecation shim, but the
+    split is what the runtime actually wants.
+    """
+    import omni.kit.commands
+
     annotator_lst = []
     for i in range(num_envs):
         if robot_type == "g1":
-            lidar_sensor = LidarRtx(f'/World/envs/env_{i}/Robot/head_link/lidar_sensor',
-                                    rotation_frequency=200,
-                                    pulse_time=1,
-                                    translation=(0.0, 0.0, 0.0),
-                                    orientation=(1.0, 0.0, 0.0, 0.0),
-                                    config_file_name="Unitree_L1")
+            path = f'/World/envs/env_{i}/Robot/head_link/lidar_sensor'
+            translation = Gf.Vec3d(0.0, 0.0, 0.0)
         else:
-            lidar_sensor = LidarRtx(f'/World/envs/env_{i}/Robot/base/lidar_sensor',
-                                    rotation_frequency=200,
-                                    pulse_time=1,
-                                    translation=(0.0, 0, 0.4),
-                                    orientation=(1.0, 0.0, 0.0, 0.0),
-                                    config_file_name="Unitree_L1")
+            path = f'/World/envs/env_{i}/Robot/base/lidar_sensor'
+            translation = Gf.Vec3d(0.0, 0.0, 0.4)
+
+        config = config_file_name
+        sensor_variant = variant
+        if sensor_variant is None and config_file_name.startswith("OS") and len(config_file_name) > 3:
+            config, sensor_variant = config_file_name[:3], config_file_name
+
+        _, prim = omni.kit.commands.execute(
+            "IsaacSensorCreateRtxLidar",
+            path=path,
+            parent=None,
+            config=config,
+            variant=sensor_variant,
+            translation=translation,
+            orientation=Gf.Quatd(1.0, 0.0, 0.0, 0.0),
+        )
+        if prim is None:
+            # commands.py logs "Config 'X' not found" and returns None, after
+            # which the command silently falls back to replicator's default
+            # Example_Rotary profile. Refuse that: a cloud from a sensor nobody
+            # asked for is worse than no cloud, because it looks healthy.
+            raise RuntimeError(
+                f"RTX LiDAR config {config!r} (variant={sensor_variant!r}) did not resolve. "
+                "Config names must match a SUPPORTED_LIDAR_CONFIGS basename exactly, "
+                "case included: 'HESAI_XT32_SD10', not 'Hesai_XT32_SD10'."
+            )
+
+        # 128x128 matches what isaacsim.sensors.rtx.LidarRtx creates for its own
+        # render product. The earlier (1, 1) also produces points, but there is
+        # no reason to diverge from the vendor's own path.
+        render_product_path = rep.create.render_product(
+            prim.GetPath().pathString, resolution=(128, 128)
+        ).path
 
         if debug:
             writer = rep.writers.get("RtxLidar" + "DebugDrawPointCloudBuffer")
-            writer.attach([lidar_sensor.get_render_product_path()])
+            writer.attach([render_product_path])
 
-        annotator = rep.AnnotatorRegistry.get_annotator("RtxSensorCpuIsaacCreateRTXLidarScanBuffer")
-        annotator.attach(lidar_sensor.get_render_product_path())
+        # Isaac Sim 6.0 dropped the "RtxSensorCpu" prefix from this annotator's
+        # registered name; the pre-6.0 name is no longer in the registry.
+        #
+        # Use the NoAccumulator registration, not "IsaacCreateRTXLidarScanBuffer".
+        # Both wrap the same OGN node type
+        # (isaacsim.sensors.rtx.IsaacCreateRTXLidarScanBuffer), but Isaac 6.0
+        # registers them differently in
+        # exts/isaacsim.sensors.rtx/.../impl/extension.py::_register_nodes:
+        # "IsaacExtractRTXSensorPointCloudNoAccumulator" is registered with
+        # init_params={"enablePerFrameOutput": True}, while the plain
+        # "IsaacCreateRTXLidarScanBuffer" is registered with no init_params at
+        # all. Calling annotator.initialize(enablePerFrameOutput=True) on the
+        # plain one is silently ignored: measured 195k to 204k points per
+        # get_data() either way, which is full-revolution accumulation.
+        #
+        # That matters beyond bandwidth. A ~204k-point cloud is ~2.4 MB per
+        # PointCloud2; publishing it at 20 Hz drove /robot0/odom down from
+        # 108-133 Hz to 1.8 Hz and /robot0/point_cloud2 to zero messages
+        # received over DDS. Accumulation mode does not just waste bytes, it
+        # stalls the sim's main loop and the cloud never arrives at all.
+        annotator = rep.AnnotatorRegistry.get_annotator(
+            "IsaacExtractRTXSensorPointCloudNoAccumulator"
+        )
+        annotator.attach(render_product_path)
         annotator_lst.append(annotator)
     return annotator_lst
 
@@ -115,6 +189,48 @@ def add_camera(num_envs, robot_type):
             cameraCfg.offset = CameraCfg.OffsetCfg(pos=(0.0, 0.0, 0.0), rot=(0.5, -0.5, 0.5, -0.5), convention="ros")
 
         Camera(cameraCfg)
+
+
+# Upper bound on points per published cloud. 8192 points is ~98 KB of
+# PointCloud2 payload, which CycloneDDS delivers without tuning.
+#
+# Why a cap is needed at all: even with the NoAccumulator (per-frame) annotator,
+# one get_data() here returns 195k to 204k points, because a rendered frame
+# spans ~0.3 s of wall clock on this machine and the RTX sensor traces
+# continuously across it. That is ~2.4 MB per PointCloud2, and at that size the
+# messages simply never arrive: `ros2 topic hz /robot0/point_cloud2` received
+# zero messages in 20 s while the publisher was running.
+#
+# This decimates real returns, it does not synthesize them. Every published
+# point is a ray the RTX sensor actually traced this frame. If the sensor stops
+# producing, there is nothing to stride over and nothing is published, so
+# HELIX's staleness gate still sees a genuinely dead topic. The gate is
+# rate-based, so density does not affect its verdict.
+_MAX_CLOUD_POINTS = 8192
+
+
+def _scan_points(annotator_lst, j):
+    """Return this frame's (N,3) sensor-frame LiDAR points for robot j, or None.
+
+    None means the annotator produced nothing on this frame, and the caller
+    must publish nothing. There is deliberately no substitute source: filling
+    /utlidar/cloud from the locomotion height scanner (or from anything else)
+    would keep HELIX's staleness gate green while the LiDAR was dead, which is
+    the exact failure the gate exists to catch.
+    """
+    if not annotator_lst:
+        return None
+    points = annotator_lst[j].get_data()['data']
+    points = np.asarray(points)
+    if points.ndim != 2 or points.shape[-1] != 3 or points.shape[0] == 0:
+        return None
+    if points.shape[0] > _MAX_CLOUD_POINTS:
+        # Uniform stride, not a head slice: the returns arrive ordered by
+        # azimuth, so taking the first N would publish a narrow wedge of the
+        # scan instead of the whole field of view.
+        stride = int(np.ceil(points.shape[0] / _MAX_CLOUD_POINTS))
+        points = points[::stride]
+    return points
 
 
 def pub_robo_data_ros2(robot_type, num_envs, base_node, env, annotator_lst, start_time):
@@ -141,16 +257,31 @@ def pub_robo_data_ros2(robot_type, num_envs, base_node, env, annotator_lst, star
             ], i)
 
         try:
-            if (time.time() - start_time) > 1 / 20:
+            # `start_time` is passed by value from the caller's loop and the
+            # original code's `start_time = time.time()` below only rebound the
+            # local name, so the caller kept handing back its original value and
+            # this branch was taken on every single iteration. With a 200k-point
+            # cloud that meant a full scipy rotation plus a 2.4 MB message build
+            # per physics step. Keep the cadence in module state so 20 Hz means
+            # 20 Hz.
+            global _LAST_LIDAR_PUB
+            if (time.time() - _LAST_LIDAR_PUB) > 1 / 20:
                 for j in range(num_envs):
-                    data = annotator_lst[j].get_data()
+                    points = _scan_points(annotator_lst, j)
+                    if points is None:
+                        continue
                     point_cloud = update_meshes_for_cloud2(
-                        data['data'], root_state[j, :3], root_state[j, 3:7]
+                        points, root_state[j, :3], root_state[j, 3:7]
                     )
                     base_node.publish_lidar(point_cloud, j)
-                start_time = time.time()
-        except Exception:
-            pass
+                _LAST_LIDAR_PUB = time.time()
+        except Exception as e:
+            # Report once. Swallowing this silently is how a permanently dead
+            # point cloud stays invisible until something downstream complains.
+            global _LIDAR_PUBLISH_FAILED
+            if not _LIDAR_PUBLISH_FAILED:
+                _LIDAR_PUBLISH_FAILED = True
+                print(f"[go2_omniverse] lidar publish FAILED ({type(e).__name__}: {e})", flush=True)
 
 
 class RobotBaseNode(Node):

@@ -46,9 +46,16 @@ Scope, stated honestly:
   angles via an `isaaclab` Camera render product (no on-screen window needed):
 
   ```bash
-  ./run_sim.sh --capture 80 --headless --enable_cameras --rendering_mode quality \
+  ./run_sim.sh --capture 80 --headless --enable_cameras --cinematic \
       --capture_dir ./media
   ```
+
+  `--cinematic` implies `--rendering_mode quality` and additionally switches the RTX
+  renderer to `PathTracing` (`--spp`, default 64) for the shots themselves. That is the
+  difference between the interactive approximation of global illumination and the real
+  thing: true contact shadows, floor reflections under the robot, and no raster grain.
+  The robot is settled on the fast renderer first, so only the three captured frames pay
+  for it and the whole run still finishes in well under a minute.
 
 - For cinematic demo footage, record the joint trajectory live, then re-render it offline
   in RTX **path-tracing** mode (live closed-loop favours the real-time preset).
